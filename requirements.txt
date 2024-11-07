@@ -2,7 +2,7 @@ fastapi
 python-multipart
 uvicorn
 nltk
-numpy
+numpy<2.0.0
 transformers
 torch
-pandas 
+pandas

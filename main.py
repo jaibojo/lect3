@@ -4,19 +4,20 @@ from fastapi.responses import HTMLResponse
 import nltk
 from nltk.tokenize import word_tokenize
 import numpy as np
-from transformers import BertTokenizer
+from transformers import BertTokenizer, BertModel
 import os
 import json
 import csv
 import pandas as pd
 import logging
 from typing import Dict, Any
+import torch
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Download all required NLTK data
+# Download required NLTK data
 try:
     nltk.download('punkt')
     nltk.download('punkt_tab')
@@ -36,6 +37,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Initialize BERT tokenizer
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 MAX_LENGTH = 512  # Maximum sequence length
+
+# Initialize BERT model
+model = BertModel.from_pretrained('bert-base-uncased')
 
 def read_file_content(file_path: str) -> str:
     """Read different file formats and return text content"""
@@ -148,49 +152,76 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
                     line_stats.append({
                         "line_number": i,
                         "original_text": "",
-                        "original_tokens": [],
+                        "nltk_tokens": [],
                         "bert_tokens": [],
-                        "token_count": {"original": 0, "bert": 0}
+                        "token_count": {
+                            "nltk": 0,
+                            "bert": 0
+                        },
+                        "embeddings": []
                     })
                     continue
                     
-                # Original tokenization
-                line_tokens = word_tokenize(line)
-                processed_lines.append(' '.join(line_tokens))
+                # NLTK tokenization
+                nltk_tokens = word_tokenize(line)
+                processed_lines.append(' '.join(nltk_tokens))
                 
-                # BERT tokenization
+                # BERT tokenization and embeddings
                 encoded = tokenizer.encode_plus(
                     line,
                     max_length=MAX_LENGTH,
                     padding='max_length',
                     truncation=True,
-                    return_tensors='pt'
+                    return_tensors='pt',
+                    return_attention_mask=True
                 )
                 
+                # Get token IDs and attention mask
+                input_ids = encoded['input_ids']
+                attention_mask = encoded['attention_mask']
+                
+                # Get BERT embeddings for this line
+                with torch.no_grad():
+                    outputs = model(input_ids, attention_mask=attention_mask)
+                    # Get the last hidden state
+                    last_hidden_state = outputs.last_hidden_state
+                    
+                # Convert embeddings to list and get only the actual tokens (exclude padding)
+                embeddings = last_hidden_state[0].tolist()
+                actual_embeddings = [
+                    emb for emb, mask in zip(embeddings, attention_mask[0].tolist())
+                    if mask == 1
+                ]
+                
+                # Get BERT tokens
                 line_token_ids = encoded['input_ids'].tolist()[0]
                 line_bert_tokens = tokenizer.convert_ids_to_tokens(line_token_ids)
-                
-                # Get actual BERT tokens (excluding special tokens and padding)
                 actual_bert_tokens = [
                     token for token in line_bert_tokens 
                     if token not in ['[PAD]', '[CLS]', '[SEP]']
                 ]
-                
                 bert_processed_lines.append(' '.join(actual_bert_tokens))
                 
                 # Store statistics for this line
                 line_stats.append({
                     "line_number": i,
                     "original_text": line,
-                    "original_tokens": line_tokens,  # Store actual tokens
-                    "bert_tokens": actual_bert_tokens,  # Store actual BERT tokens
+                    "nltk_tokens": nltk_tokens,
+                    "bert_tokens": actual_bert_tokens,
                     "token_count": {
-                        "original": len(line_tokens),
+                        "nltk": len(nltk_tokens),
                         "bert": len(actual_bert_tokens)
+                    },
+                    "embeddings": {
+                        "tokens": actual_bert_tokens[:5],  # First 5 tokens
+                        "vectors": [
+                            [round(x, 4) for x in vector[:10]]  # First 10 dimensions of each vector
+                            for vector in actual_embeddings[:5]  # First 5 vectors
+                        ]
                     }
                 })
                 
-                total_tokens += len(line_tokens)
+                total_tokens += len(nltk_tokens)
             
             preprocessed_text = '\n'.join(processed_lines)
             bert_preprocessed_text = '\n'.join(bert_processed_lines)
