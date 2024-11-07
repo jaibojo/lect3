@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Text File Processor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .preview {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+        #preprocessButton {
+            display: none;
+        }
+        .results {
+            margin-top: 20px;
+        }
+        .error {
+            color: red;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Text File Processor</h1>
+    
+    <input type="file" id="fileInput" accept=".txt,.csv,.json,.tsv">
+    <div id="errorMessage" class="error"></div>
+    <button id="preprocessButton" disabled>Pre-Process my file</button>
+    
+    <h2>File Preview:</h2>
+    <div id="filePreview" class="preview"></div>
+    
+    <div class="results">
+        <h2>Processing Results:</h2>
+        <div id="tokenCount"></div>
+        <h3>Preprocessed Tokens:</h3>
+        <div id="preprocessedPreview" class="preview"></div>
+    </div>
+
+    <script>
+        let currentFileName = '';
+
+        document.getElementById('fileInput').addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload/', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail);
+                }
+                
+                const data = await response.json();
+                document.getElementById('errorMessage').textContent = '';
+                document.getElementById('filePreview').textContent = data.content;
+                document.getElementById('preprocessButton').style.display = 'block';
+                document.getElementById('preprocessButton').disabled = false;
+                currentFileName = data.filename;
+            } catch (error) {
+                document.getElementById('errorMessage').textContent = error.message;
+                document.getElementById('filePreview').textContent = '';
+                document.getElementById('preprocessButton').style.display = 'none';
+            }
+        });
+
+        document.getElementById('preprocessButton').addEventListener('click', async () => {
+            if (!currentFileName) return;
+
+            try {
+                const response = await fetch(`/preprocess/${currentFileName}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                document.getElementById('tokenCount').textContent = `Number of tokens: ${data.num_tokens}`;
+                document.getElementById('preprocessedPreview').innerHTML = 
+                    `<p><strong>Original tokens:</strong> ${data.preprocessed_tokens.join(' ')}</p>
+                     <p><strong>BERT tokens:</strong> ${data.bert_tokens.join(' ')}</p>`;
+            } catch (error) {
+                document.getElementById('errorMessage').textContent = 'Error processing file';
+            }
+        });
+    </script>
+</body>
+</html> 

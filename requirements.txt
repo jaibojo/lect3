@@ -1,0 +1,8 @@
+fastapi
+python-multipart
+uvicorn
+nltk
+numpy
+transformers
+torch
+pandas 
