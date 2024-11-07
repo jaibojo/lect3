@@ -43,7 +43,7 @@
     <div class="results">
         <h2>Processing Results:</h2>
         <div id="tokenCount"></div>
-        <h3>Preprocessed Tokens:</h3>
+        <h3>Preprocessed Text:</h3>
         <div id="preprocessedPreview" class="preview"></div>
     </div>
 
@@ -75,7 +75,7 @@
                 document.getElementById('preprocessButton').disabled = false;
                 currentFileName = data.filename;
             } catch (error) {
-                document.getElementById('errorMessage').textContent = error.message;
+                document.getElementById('errorMessage').textContent = `Upload error: ${error.message}`;
                 document.getElementById('filePreview').textContent = '';
                 document.getElementById('preprocessButton').style.display = 'none';
             }
@@ -85,17 +85,62 @@
             if (!currentFileName) return;
 
             try {
+                document.getElementById('errorMessage').textContent = 'Processing...';
                 const response = await fetch(`/preprocess/${currentFileName}`, {
                     method: 'POST'
                 });
-                const data = await response.json();
 
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Server error');
+                }
+
+                const data = await response.json();
+                document.getElementById('errorMessage').textContent = '';
                 document.getElementById('tokenCount').textContent = `Number of tokens: ${data.num_tokens}`;
-                document.getElementById('preprocessedPreview').innerHTML = 
-                    `<p><strong>Original tokens:</strong> ${data.preprocessed_tokens.join(' ')}</p>
-                     <p><strong>BERT tokens:</strong> ${data.bert_tokens.join(' ')}</p>`;
+                document.getElementById('preprocessedPreview').innerHTML = `
+                    <div>
+                        <h4>Line-by-Line Analysis:</h4>
+                        <table style="width:100%; border-collapse: collapse; margin-bottom: 20px;">
+                            <tr style="background-color: #f0f0f0;">
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Line #</th>
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Original Text</th>
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Original Tokens</th>
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">BERT Tokens</th>
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: center;">Original Count</th>
+                                <th style="border: 1px solid #ddd; padding: 8px; text-align: center;">BERT Count</th>
+                            </tr>
+                            ${data.line_stats.map(line => `
+                                <tr>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">${line.line_number}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">${line.original_text}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">${line.original_tokens.join(' ')}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px;">${line.bert_tokens.join(' ')}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${line.token_count.original}</td>
+                                    <td style="border: 1px solid #ddd; padding: 8px; text-align: center;">${line.token_count.bert}</td>
+                                </tr>
+                            `).join('')}
+                        </table>
+
+                        <h4>Original Text After Tokenization:</h4>
+                        <pre>${data.preprocessed_text}</pre>
+                        
+                        <h4>BERT Preprocessed Text:</h4>
+                        <pre>${data.bert_preprocessed_text}</pre>
+                        
+                        <h4>Padding/Truncating Information:</h4>
+                        <p>Original length: ${data.padding_info.original_length} tokens</p>
+                        <p>Maximum length: ${data.padding_info.max_length} tokens</p>
+                        <p>Final length: ${data.padding_info.final_length} tokens</p>
+                        <p>Was padded: ${data.padding_info.is_padded ? 'Yes' : 'No'}</p>
+                        <p>Was truncated: ${data.padding_info.is_truncated ? 'Yes' : 'No'}</p>
+                    </div>
+                `;
             } catch (error) {
-                document.getElementById('errorMessage').textContent = 'Error processing file';
+                console.error('Processing error:', error);
+                document.getElementById('errorMessage').textContent = `Processing error: ${error.message}`;
+                document.getElementById('preprocessedPreview').innerHTML = '';
+                document.getElementById('tokenCount').textContent = '';
             }
         });
     </script>

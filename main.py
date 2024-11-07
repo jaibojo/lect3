@@ -16,8 +16,17 @@ from typing import Dict, Any
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Download required NLTK data
-nltk.download('punkt')
+# Download all required NLTK data
+try:
+    nltk.download('punkt')
+    nltk.download('punkt_tab')
+    nltk.download('averaged_perceptron_tagger')
+    nltk.download('maxent_ne_chunker')
+    nltk.download('words')
+    logger.info("Successfully downloaded NLTK data")
+except Exception as e:
+    logger.error(f"Error downloading NLTK data: {str(e)}")
+    raise
 
 app = FastAPI()
 
@@ -116,37 +125,107 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
         logger.debug(f"Preprocessing file: {file_path}")
         
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File not found")
+            logger.error(f"File not found: {file_path}")
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
             
-        text = read_file_content(file_path)
+        try:
+            text = read_file_content(file_path)
+            lines = text.split('\n')
+        except Exception as e:
+            logger.error(f"Error reading file content: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
         
-        # 1. Tokenization
-        tokens = word_tokenize(text)
-        logger.debug(f"Tokenization complete. Number of tokens: {len(tokens)}")
-        
-        # 2. BERT Tokenization (includes padding/truncating)
-        encoded = tokenizer.encode_plus(
-            text,
-            max_length=MAX_LENGTH,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
-        logger.debug("BERT tokenization complete")
-        
-        # 3. Get embeddings (we'll just return the token IDs for simplicity)
-        token_ids = encoded['input_ids'].tolist()[0]
-        bert_tokens = tokenizer.convert_ids_to_tokens(token_ids)[:100]
+        try:
+            processed_lines = []
+            bert_processed_lines = []
+            total_tokens = 0
+            line_stats = []  # Store statistics for each line
+            
+            for i, line in enumerate(lines, 1):
+                if not line.strip():
+                    processed_lines.append('')
+                    bert_processed_lines.append('')
+                    line_stats.append({
+                        "line_number": i,
+                        "original_text": "",
+                        "original_tokens": [],
+                        "bert_tokens": [],
+                        "token_count": {"original": 0, "bert": 0}
+                    })
+                    continue
+                    
+                # Original tokenization
+                line_tokens = word_tokenize(line)
+                processed_lines.append(' '.join(line_tokens))
+                
+                # BERT tokenization
+                encoded = tokenizer.encode_plus(
+                    line,
+                    max_length=MAX_LENGTH,
+                    padding='max_length',
+                    truncation=True,
+                    return_tensors='pt'
+                )
+                
+                line_token_ids = encoded['input_ids'].tolist()[0]
+                line_bert_tokens = tokenizer.convert_ids_to_tokens(line_token_ids)
+                
+                # Get actual BERT tokens (excluding special tokens and padding)
+                actual_bert_tokens = [
+                    token for token in line_bert_tokens 
+                    if token not in ['[PAD]', '[CLS]', '[SEP]']
+                ]
+                
+                bert_processed_lines.append(' '.join(actual_bert_tokens))
+                
+                # Store statistics for this line
+                line_stats.append({
+                    "line_number": i,
+                    "original_text": line,
+                    "original_tokens": line_tokens,  # Store actual tokens
+                    "bert_tokens": actual_bert_tokens,  # Store actual BERT tokens
+                    "token_count": {
+                        "original": len(line_tokens),
+                        "bert": len(actual_bert_tokens)
+                    }
+                })
+                
+                total_tokens += len(line_tokens)
+            
+            preprocessed_text = '\n'.join(processed_lines)
+            bert_preprocessed_text = '\n'.join(bert_processed_lines)
+            
+            # Overall padding statistics
+            original_length = len(tokenizer.encode(text))
+            is_padded = original_length < MAX_LENGTH
+            is_truncated = original_length > MAX_LENGTH
+            padding_info = {
+                "original_length": original_length,
+                "max_length": MAX_LENGTH,
+                "is_padded": is_padded,
+                "is_truncated": is_truncated,
+                "final_length": MAX_LENGTH if (is_padded or is_truncated) else original_length
+            }
+            
+            logger.debug(f"Padding info: {padding_info}")
+            
+        except Exception as e:
+            logger.error(f"Processing error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
         
         return {
-            "num_tokens": len(tokens),
-            "preprocessed_tokens": tokens[:100],
-            "bert_tokens": bert_tokens
+            "num_tokens": total_tokens,
+            "preprocessed_text": preprocessed_text,
+            "bert_preprocessed_text": bert_preprocessed_text,
+            "padding_info": padding_info,
+            "line_stats": line_stats
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Preprocessing error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected preprocessing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 # Add cleanup endpoint to remove temporary files
 @app.on_event("shutdown")
