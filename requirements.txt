@@ -6,3 +6,5 @@ numpy<2.0.0
 transformers
 torch
 pandas
+python-docx  # For handling .docx files
+openpyxl    # For handling Excel files

@@ -1,28 +1,59 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Text File Processor</title>
+    <title>JG's Text File Pre-Processor</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
-        <h1>Text File Processor</h1>
+        <h1>JG's Text File Pre-Processor</h1>
         
-        <div class="file-input-container">
-            <input type="file" id="fileInput" accept=".txt,.csv,.json,.tsv">
-            <button id="preprocessButton" disabled>Pre-Process File</button>
-        </div>
-        <div id="errorMessage" class="error" style="display: none;"></div>
-        
-        <h2>File Preview</h2>
-        <div id="filePreview" class="preview"></div>
-        
-        <div class="results">
-            <h2>Processing Results</h2>
-            <div class="stats-container">
-                <div id="tokenCount" class="stat-card"></div>
+        <div class="controls-container">
+            <div class="input-section">
+                <div class="file-input-container">
+                    <input type="file" id="fileInput" accept=".txt,.csv,.json,.docx,.xlsx">
+                </div>
+                <button id="preprocessButton" disabled>Pre-Process File</button>
             </div>
-            <div id="preprocessedPreview"></div>
+            <div class="augment-section">
+                <div class="augmentation-controls">
+                    <div class="control-group">
+                        <label for="numAugmentations">Augmentations:</label>
+                        <input type="number" id="numAugmentations" min="1" max="10" value="3" style="width: 60px;">
+                    </div>
+                    <div class="control-group">
+                        <label for="replaceProb">Probability:</label>
+                        <input type="range" id="replaceProb" min="0" max="100" value="30" style="width: 100px;">
+                        <span id="replaceProbValue">0.3</span>
+                    </div>
+                    <button id="augmentButton" class="action-button" disabled>Augment Text</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="errorMessage" class="error" style="display: none;"></div>
+
+        <div class="sections-nav">
+            <div class="section-tab" data-section="original">Original File</div>
+            <div class="section-tab" data-section="preprocessed">Pre-Processed File</div>
+            <div class="section-tab" data-section="augmented">Augmented File</div>
+        </div>
+
+        <div class="section-content" id="original-section">
+            <h2>Original File Content</h2>
+            <div id="filePreview" class="preview"></div>
+        </div>
+
+        <div class="section-content" id="preprocessed-section">
+            <h2>Processing Results</h2>
+            <div class="scrollable-content">
+                <div id="preprocessedPreview"></div>
+            </div>
+        </div>
+
+        <div class="section-content" id="augmented-section">
+            <h2>Augmentation Results</h2>
+            <div class="scrollable-content" id="augmentationResults"></div>
         </div>
     </div>
 
@@ -35,15 +66,76 @@
             errorElement.style.display = message ? 'block' : 'none';
         }
 
-        function showLoading(isLoading) {
-            const button = document.getElementById('preprocessButton');
-            button.textContent = isLoading ? 'Processing...' : 'Pre-Process File';
+        function showLoading(isLoading, buttonId = 'preprocessButton') {
+            const button = document.getElementById(buttonId);
+            const otherButton = document.getElementById(buttonId === 'preprocessButton' ? 'augmentButton' : 'preprocessButton');
+            
+            if (buttonId === 'preprocessButton') {
+                button.textContent = isLoading ? 'Processing...' : 'Pre-Process File';
+            } else if (buttonId === 'augmentButton') {
+                button.textContent = isLoading ? 'Augmenting...' : 'Augment Text';
+            }
+            
+            // Only disable the button that's loading
             button.disabled = isLoading;
         }
 
+        function activateSection(sectionId) {
+            // Remove active class from all tabs and sections
+            document.querySelectorAll('.section-tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.section-content').forEach(section => section.classList.remove('active'));
+            
+            // Add active class to selected tab and section
+            document.querySelector(`.section-tab[data-section="${sectionId}"]`).classList.add('active');
+            document.getElementById(`${sectionId}-section`).classList.add('active');
+        }
+
+        // Initialize with original section active
+        activateSection('original');
+
+        // Add click handlers for tabs
+        document.querySelectorAll('.section-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                activateSection(tab.dataset.section);
+            });
+        });
+
+        function updateButtonStates(state) {
+            const preprocessButton = document.getElementById('preprocessButton');
+            const augmentButton = document.getElementById('augmentButton');
+            
+            switch(state) {
+                case 'initial':
+                    preprocessButton.disabled = true;
+                    augmentButton.disabled = true;
+                    break;
+                case 'file_uploaded':
+                    preprocessButton.disabled = false;
+                    augmentButton.disabled = true;
+                    break;
+                case 'preprocessed':
+                    preprocessButton.disabled = false;
+                    augmentButton.disabled = false;
+                    break;
+                case 'augmenting':
+                    preprocessButton.disabled = true;
+                    augmentButton.disabled = true;
+                    break;
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateButtonStates('initial');
+        });
+
+        // Update file input handler
         document.getElementById('fileInput').addEventListener('change', async (event) => {
             const file = event.target.files[0];
-            if (!file) return;
+            if (!file) {
+                updateButtonStates('initial');
+                return;
+            }
 
             const formData = new FormData();
             formData.append('file', file);
@@ -62,16 +154,18 @@
                 
                 const data = await response.json();
                 document.getElementById('filePreview').textContent = data.content;
-                document.getElementById('preprocessButton').style.display = 'inline-block';
-                document.getElementById('preprocessButton').disabled = false;
+                
                 currentFileName = data.filename;
+                updateButtonStates('file_uploaded');
+                activateSection('original');
             } catch (error) {
                 showError(`Upload error: ${error.message}`);
                 document.getElementById('filePreview').textContent = '';
-                document.getElementById('preprocessButton').style.display = 'none';
+                updateButtonStates('initial');
             }
         });
 
+        // Update preprocess button handler
         document.getElementById('preprocessButton').addEventListener('click', async () => {
             if (!currentFileName) return;
 
@@ -89,16 +183,25 @@
 
                 const data = await response.json();
                 
-                document.getElementById('tokenCount').innerHTML = `
-                    <h5>Token Statistics</h5>
-                    <p>Total tokens: ${data.num_tokens}</p>
-                `;
-                
                 document.getElementById('preprocessedPreview').innerHTML = `
+                    <div class="stats-container">
+                        <div class="stat-card">
+                            <h5>Token Statistics</h5>
+                            <p>Total tokens: ${data.num_tokens}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h5>Padding Information</h5>
+                            <p>Original length: ${data.padding_info.original_length} tokens</p>
+                            <p>Maximum length: ${data.padding_info.max_length} tokens</p>
+                            <p>Final length: ${data.padding_info.final_length} tokens</p>
+                            <p>Was padded: ${data.padding_info.is_padded ? 'Yes' : 'No'}</p>
+                            <p>Was truncated: ${data.padding_info.is_truncated ? 'Yes' : 'No'}</p>
+                        </div>
+                    </div>
+
                     <h3>Line-by-Line Analysis</h3>
                     <table class="analysis-table">
                         <tr>
-                            <th>Line #</th>
                             <th>Original Text</th>
                             <th>NLTK Tokens</th>
                             <th>BERT Tokens</th>
@@ -107,16 +210,15 @@
                         </tr>
                         ${data.line_stats.map(line => `
                             <tr>
-                                <td>${line.line_number}</td>
                                 <td>${line.original_text}</td>
                                 <td>${line.nltk_tokens.join(' ')}</td>
                                 <td>${line.bert_tokens.join(' ')}</td>
-                                <td>${line.token_count.nltk}</td>
-                                <td>${line.token_count.bert}</td>
+                                <td style="text-align: center;">${line.token_count.nltk}</td>
+                                <td style="text-align: center;">${line.token_count.bert}</td>
                             </tr>
                             ${line.embeddings && line.embeddings.tokens ? `
                             <tr class="embeddings-row">
-                                <td colspan="6">
+                                <td colspan="5">
                                     <div class="embeddings-container">
                                         <strong>BERT Embeddings (first 5 tokens, first 10 dimensions)</strong>
                                         ${line.embeddings.tokens.map((token, idx) => `
@@ -131,25 +233,78 @@
                             ` : ''}
                         `).join('')}
                     </table>
-
-                    <div class="stats-container">
-                        <div class="stat-card">
-                            <h5>Padding Information</h5>
-                            <p>Original length: ${data.padding_info.original_length} tokens</p>
-                            <p>Maximum length: ${data.padding_info.max_length} tokens</p>
-                            <p>Final length: ${data.padding_info.final_length} tokens</p>
-                            <p>Was padded: ${data.padding_info.is_padded ? 'Yes' : 'No'}</p>
-                            <p>Was truncated: ${data.padding_info.is_truncated ? 'Yes' : 'No'}</p>
-                        </div>
-                    </div>
                 `;
+
+                // Enable augmentation button after preprocessing
+                document.getElementById('augmentButton').disabled = false;
+                activateSection('preprocessed');
+
+                updateButtonStates('preprocessed');
+                activateSection('preprocessed');
             } catch (error) {
                 console.error('Processing error:', error);
                 showError(`Processing error: ${error.message}`);
                 document.getElementById('preprocessedPreview').innerHTML = '';
-                document.getElementById('tokenCount').innerHTML = '';
+                updateButtonStates('file_uploaded');
             } finally {
                 showLoading(false);
+            }
+        });
+
+        document.getElementById('replaceProb').addEventListener('input', (e) => {
+            const value = e.target.value / 100;
+            document.getElementById('replaceProbValue').textContent = value.toFixed(2);
+        });
+
+        document.getElementById('augmentButton').addEventListener('click', async () => {
+            if (!currentFileName) return;
+            
+            try {
+                updateButtonStates('augmenting');
+                showLoading(true, 'augmentButton');
+                showError('');
+                
+                const numAugmentations = document.getElementById('numAugmentations').value;
+                const replaceProb = document.getElementById('replaceProb').value / 100;
+                
+                const response = await fetch(`/augment/${currentFileName}?num_augmentations=${numAugmentations}&replace_prob=${replaceProb}`, {
+                    method: 'POST'
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Server error');
+                }
+
+                const data = await response.json();
+                
+                document.getElementById('augmentationResults').innerHTML = `
+                    <h3>Augmentation Results</h3>
+                    <div class="augmented-text">
+                        ${data.augmented_versions.map(version => `
+                            <div class="augmentation-group">
+                                <div class="original-text">
+                                    <strong>Original:</strong>
+                                    <pre>${version.original}</pre>
+                                </div>
+                                <div class="augmented-versions">
+                                    <strong>Augmented Versions:</strong>
+                                    ${version.augmented.map((text, idx) => `
+                                        <pre class="augmented-version">Version ${idx + 1}: ${text}</pre>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+
+                activateSection('augmented');
+            } catch (error) {
+                console.error('Augmentation error:', error);
+                showError(`Augmentation error: ${error.message}`);
+            } finally {
+                showLoading(false, 'augmentButton');
+                updateButtonStates('preprocessed');  // Return to preprocessed state
             }
         });
     </script>

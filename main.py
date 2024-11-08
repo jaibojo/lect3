@@ -3,6 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 import nltk
 from nltk.tokenize import word_tokenize
+from nltk.corpus import wordnet
+from nltk.tag import pos_tag
 import numpy as np
 from transformers import BertTokenizer, BertModel
 import os
@@ -10,8 +12,11 @@ import json
 import csv
 import pandas as pd
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 import torch
+import random
+import re
+from docx import Document
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -28,6 +33,11 @@ try:
 except Exception as e:
     logger.error(f"Error downloading NLTK data: {str(e)}")
     raise
+
+# Download additional NLTK data for WordNet
+nltk.download('wordnet')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('omw-1.4')
 
 app = FastAPI()
 
@@ -52,32 +62,87 @@ def read_file_content(file_path: str) -> str:
         
         if file_extension == 'txt':
             with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+                content = '\n'.join(lines)
                 logger.debug(f"Successfully read TXT file, content length: {len(content)}")
                 return content
+                
+        elif file_extension == 'csv':
+            try:
+                # Read CSV file
+                df = pd.read_csv(file_path)
+                # Convert each row to string and join with newlines
+                lines = []
+                for _, row in df.iterrows():
+                    # Join non-null values in the row
+                    row_text = ' '.join(str(val) for val in row if pd.notna(val))
+                    if row_text.strip():
+                        lines.append(row_text)
+                content = '\n'.join(lines)
+                logger.debug(f"Successfully read CSV file, content length: {len(content)}")
+                return content
+            except Exception as e:
+                logger.error(f"CSV read error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error reading CSV file: {str(e)}")
+                
+        elif file_extension == 'docx':
+            try:
+                doc = Document(file_path)
+                lines = []
+                for paragraph in doc.paragraphs:
+                    text = paragraph.text.strip()
+                    if text:
+                        # Split by comma and clean up each feedback
+                        feedbacks = [feedback.strip() for feedback in text.split(',') if feedback.strip()]
+                        # Add each feedback as a separate line
+                        lines.extend(feedbacks)
+                content = '\n'.join(lines)
+                logger.debug(f"Successfully read DOCX file, content length: {len(content)}")
+                return content
+            except Exception as e:
+                logger.error(f"DOCX read error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error reading DOCX file: {str(e)}")
+                
+        elif file_extension == 'xlsx':
+            try:
+                # Read Excel file
+                df = pd.read_excel(file_path)
+                # Convert each row to string and join with newlines
+                lines = []
+                for _, row in df.iterrows():
+                    # Join non-null values in the row
+                    row_text = ' '.join(str(val) for val in row if pd.notna(val))
+                    if row_text.strip():
+                        lines.append(row_text)
+                content = '\n'.join(lines)
+                logger.debug(f"Successfully read Excel file, content length: {len(content)}")
+                return content
+            except Exception as e:
+                logger.error(f"Excel read error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Error reading Excel file: {str(e)}")
                 
         elif file_extension == 'json':
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    content = json.dumps(data, indent=2)
+                    # Handle different JSON structures
+                    if isinstance(data, list):
+                        # If it's a list of items
+                        lines = []
+                        for item in data:
+                            if isinstance(item, (str, int, float)):
+                                lines.append(str(item))
+                            else:
+                                lines.append(json.dumps(item))
+                        content = '\n'.join(lines)
+                    else:
+                        # If it's a single object
+                        content = json.dumps(data, indent=2)
                     logger.debug(f"Successfully read JSON file, content length: {len(content)}")
                     return content
             except json.JSONDecodeError as e:
                 logger.error(f"JSON decode error: {str(e)}")
                 raise HTTPException(status_code=400, detail=f"Invalid JSON file: {str(e)}")
-                
-        elif file_extension in ['csv', 'tsv']:
-            try:
-                df = pd.read_csv(file_path, sep=',' if file_extension == 'csv' else '\t')
-                content = df.to_string()
-                logger.debug(f"Successfully read CSV/TSV file, content length: {len(content)}")
-                return content
-            except pd.errors.EmptyDataError:
-                return "Empty file"
-            except Exception as e:
-                logger.error(f"CSV/TSV read error: {str(e)}")
-                raise HTTPException(status_code=400, detail=f"Error reading CSV/TSV file: {str(e)}")
             
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported file format: {file_extension}")
@@ -95,7 +160,7 @@ async def read_root():
 async def upload_file(file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
         # Check file extension
-        allowed_extensions = {'txt', 'csv', 'json', 'tsv'}
+        allowed_extensions = {'txt', 'csv', 'json', 'docx', 'xlsx'}
         file_extension = file.filename.split('.')[-1].lower()
         
         if file_extension not in allowed_extensions:
@@ -134,7 +199,8 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
             
         try:
             text = read_file_content(file_path)
-            lines = text.split('\n')
+            # Split by newline and filter out empty lines
+            lines = [line for line in text.split('\n') if line.strip()]
         except Exception as e:
             logger.error(f"Error reading file content: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
@@ -143,26 +209,11 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
             processed_lines = []
             bert_processed_lines = []
             total_tokens = 0
-            line_stats = []  # Store statistics for each line
+            line_stats = []
             
-            for i, line in enumerate(lines, 1):
-                if not line.strip():
-                    processed_lines.append('')
-                    bert_processed_lines.append('')
-                    line_stats.append({
-                        "line_number": i,
-                        "original_text": "",
-                        "nltk_tokens": [],
-                        "bert_tokens": [],
-                        "token_count": {
-                            "nltk": 0,
-                            "bert": 0
-                        },
-                        "embeddings": []
-                    })
-                    continue
-                    
-                # NLTK tokenization
+            # Process only non-empty lines without line numbers
+            for line in lines:
+                # Process non-empty lines
                 nltk_tokens = word_tokenize(line)
                 processed_lines.append(' '.join(nltk_tokens))
                 
@@ -202,9 +253,8 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
                 ]
                 bert_processed_lines.append(' '.join(actual_bert_tokens))
                 
-                # Store statistics for this line
+                # Store statistics without line number
                 line_stats.append({
-                    "line_number": i,
                     "original_text": line,
                     "nltk_tokens": nltk_tokens,
                     "bert_tokens": actual_bert_tokens,
@@ -213,10 +263,10 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
                         "bert": len(actual_bert_tokens)
                     },
                     "embeddings": {
-                        "tokens": actual_bert_tokens[:5],  # First 5 tokens
+                        "tokens": actual_bert_tokens[:5],
                         "vectors": [
-                            [round(x, 4) for x in vector[:10]]  # First 10 dimensions of each vector
-                            for vector in actual_embeddings[:5]  # First 5 vectors
+                            [round(x, 4) for x in vector[:10]]
+                            for vector in actual_embeddings[:5]
                         ]
                     }
                 })
@@ -257,6 +307,171 @@ async def preprocess_file(filename: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Unexpected preprocessing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+def get_wordnet_pos(tag: str) -> str:
+    """Map POS tag to WordNet POS tag with more accurate mapping"""
+    tag_dict = {
+        'JJ': wordnet.ADJ,
+        'JJR': wordnet.ADJ,
+        'JJS': wordnet.ADJ,
+        'NN': wordnet.NOUN,
+        'NNS': wordnet.NOUN,
+        'NNP': wordnet.NOUN,
+        'NNPS': wordnet.NOUN,
+        'RB': wordnet.ADV,
+        'RBR': wordnet.ADV,
+        'RBS': wordnet.ADV,
+        'VB': wordnet.VERB,
+        'VBD': wordnet.VERB,
+        'VBG': wordnet.VERB,
+        'VBN': wordnet.VERB,
+        'VBP': wordnet.VERB,
+        'VBZ': wordnet.VERB
+    }
+    return tag_dict.get(tag, None)  # Return None if POS tag not found
+
+def get_synonyms(word: str, pos: str) -> List[str]:
+    """Get better quality synonyms for a word with given POS tag"""
+    if not pos:  # Skip words with unknown POS
+        return []
+        
+    word = word.lower()
+    synonyms = []
+    
+    # Get all synsets for the word
+    synsets = wordnet.synsets(word, pos=pos)
+    
+    # Get synonyms from each synset
+    for synset in synsets:
+        # Get the definition and examples for context
+        definition = synset.definition()
+        examples = synset.examples()
+        
+        # Get lemmas (synonyms)
+        for lemma in synset.lemmas():
+            synonym = lemma.name()
+            
+            # Filter conditions for better quality
+            if (synonym != word and  # Not the same word
+                '_' not in synonym and  # No compound words
+                len(synonym) > 2 and  # No very short words
+                synonym.isalpha()):  # Only alphabetic characters
+                
+                synonyms.append(synonym)
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    filtered_synonyms = []
+    for syn in synonyms:
+        if syn not in seen:
+            seen.add(syn)
+            filtered_synonyms.append(syn)
+    
+    return filtered_synonyms[:5]  # Limit to top 5 synonyms for better quality
+
+def preserve_case(original_word: str, new_word: str) -> str:
+    """Preserve the case pattern of the original word"""
+    if original_word.isupper():
+        return new_word.upper()
+    elif original_word.istitle():
+        return new_word.title()
+    elif original_word.islower():
+        return new_word.lower()
+    return new_word
+
+def augment_text(text: str, num_augmentations: int = 3, replace_prob: float = 0.3) -> List[str]:
+    """
+    Improved text augmentation with better quality synonyms
+    """
+    words = word_tokenize(text)
+    tagged_words = pos_tag(words)
+    augmented_texts = []
+    
+    # Store word-synonym pairs for consistency
+    word_synonyms = {}
+    
+    for _ in range(num_augmentations):
+        new_words = []
+        
+        for word, tag in tagged_words:
+            if word.lower() in word_synonyms:
+                # Use previously selected synonym for consistency
+                synonym = word_synonyms[word.lower()]
+                new_words.append(preserve_case(word, synonym))
+                continue
+                
+            if (random.random() < replace_prob and 
+                len(word) > 2 and  # Skip very short words
+                word.isalpha()):  # Only process alphabetic words
+                
+                pos = get_wordnet_pos(tag)
+                if pos:  # Only process words with valid POS tags
+                    synonyms = get_synonyms(word, pos)
+                    
+                    if synonyms:
+                        synonym = random.choice(synonyms)
+                        word_synonyms[word.lower()] = synonym
+                        new_words.append(preserve_case(word, synonym))
+                        continue
+            
+            new_words.append(word)
+        
+        augmented_texts.append(' '.join(new_words))
+    
+    # Ensure augmented texts are unique
+    augmented_texts = list(set(augmented_texts))
+    if len(augmented_texts) < num_augmentations:
+        # If we don't have enough unique versions, add the original text
+        augmented_texts.append(text)
+    
+    return augmented_texts[:num_augmentations]
+
+@app.post("/augment/{filename}")
+async def augment_file(
+    filename: str,
+    num_augmentations: int = 3,
+    replace_prob: float = 0.3
+) -> Dict[str, Any]:
+    try:
+        file_path = f"static/uploads/{filename}"
+        
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+        
+        # Read the original text
+        text = read_file_content(file_path)
+        
+        # Process text line by line
+        original_lines = text.split('\n')
+        augmented_versions = []
+        
+        for line in original_lines:
+            if line.strip():
+                # Augment each non-empty line
+                augmented_lines = augment_text(
+                    line,
+                    num_augmentations=num_augmentations,
+                    replace_prob=replace_prob
+                )
+                augmented_versions.append({
+                    "original": line,
+                    "augmented": augmented_lines
+                })
+            else:
+                augmented_versions.append({
+                    "original": line,
+                    "augmented": [line] * num_augmentations
+                })
+        
+        return {
+            "num_augmentations": num_augmentations,
+            "replace_probability": replace_prob,
+            "augmented_versions": augmented_versions
+        }
+        
+    except Exception as e:
+        logger.error(f"Augmentation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Augmentation error: {str(e)}")
 
 # Add cleanup endpoint to remove temporary files
 @app.on_event("shutdown")
