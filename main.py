@@ -379,9 +379,48 @@ def preserve_case(original_word: str, new_word: str) -> str:
         return new_word.lower()
     return new_word
 
+def get_random_word(pos: str) -> str:
+    """Get a random word from WordNet based on POS"""
+    synsets = list(wordnet.all_synsets(pos=pos))
+    if synsets:
+        synset = random.choice(synsets)
+        return synset.lemmas()[0].name()
+    return ""
+
+def insert_random_word(words: List[str], tagged_words: List[tuple], num_insertions: int = 1) -> List[str]:
+    """Insert random words that match the context"""
+    new_words = words.copy()
+    for _ in range(num_insertions):
+        # Choose a random position
+        insert_pos = random.randint(0, len(tagged_words))
+        
+        # Determine appropriate POS for insertion based on context
+        if insert_pos > 0 and insert_pos < len(tagged_words):
+            prev_pos = get_wordnet_pos(tagged_words[insert_pos-1][1])
+            next_pos = get_wordnet_pos(tagged_words[insert_pos][1])
+            pos_choices = [p for p in [prev_pos, next_pos] if p]
+            if pos_choices:
+                pos = random.choice(pos_choices)
+                word = get_random_word(pos)
+                if word:
+                    new_words.insert(insert_pos, word)
+    return new_words
+
+def swap_words(words: List[str], num_swaps: int = 1) -> List[str]:
+    """Randomly swap words that are near each other"""
+    new_words = words.copy()
+    for _ in range(num_swaps):
+        if len(new_words) > 1:
+            pos = random.randint(0, len(new_words)-2)
+            new_words[pos], new_words[pos+1] = new_words[pos+1], new_words[pos]
+    return new_words
+
 def augment_text(text: str, num_augmentations: int = 3, replace_prob: float = 0.3) -> List[str]:
     """
-    Improved text augmentation with better quality synonyms
+    Enhanced text augmentation with multiple techniques:
+    1. Synonym replacement
+    2. Random word insertion
+    3. Word swapping
     """
     words = word_tokenize(text)
     tagged_words = pos_tag(words)
@@ -391,38 +430,51 @@ def augment_text(text: str, num_augmentations: int = 3, replace_prob: float = 0.
     word_synonyms = {}
     
     for _ in range(num_augmentations):
-        new_words = []
+        # Choose augmentation technique randomly
+        technique = random.choice(['synonym', 'insert', 'swap', 'combined'])
+        new_words = words.copy()
         
-        for word, tag in tagged_words:
-            if word.lower() in word_synonyms:
-                # Use previously selected synonym for consistency
-                synonym = word_synonyms[word.lower()]
-                new_words.append(preserve_case(word, synonym))
-                continue
-                
-            if (random.random() < replace_prob and 
-                len(word) > 2 and  # Skip very short words
-                word.isalpha()):  # Only process alphabetic words
-                
-                pos = get_wordnet_pos(tag)
-                if pos:  # Only process words with valid POS tags
-                    synonyms = get_synonyms(word, pos)
+        if technique in ['synonym', 'combined']:
+            # Synonym replacement
+            for i, (word, tag) in enumerate(tagged_words):
+                if word.lower() in word_synonyms:
+                    new_words[i] = preserve_case(word, word_synonyms[word.lower()])
+                    continue
                     
-                    if synonyms:
-                        synonym = random.choice(synonyms)
-                        word_synonyms[word.lower()] = synonym
-                        new_words.append(preserve_case(word, synonym))
-                        continue
-            
-            new_words.append(word)
+                if (random.random() < replace_prob and 
+                    len(word) > 2 and 
+                    word.isalpha()):
+                    
+                    pos = get_wordnet_pos(tag)
+                    if pos:
+                        synonyms = get_synonyms(word, pos)
+                        if synonyms:
+                            synonym = random.choice(synonyms)
+                            word_synonyms[word.lower()] = synonym
+                            new_words[i] = preserve_case(word, synonym)
         
-        augmented_texts.append(' '.join(new_words))
+        if technique in ['insert', 'combined']:
+            # Random word insertion
+            new_words = insert_random_word(new_words, tagged_words, 
+                                         num_insertions=random.randint(1, 2))
+        
+        if technique in ['swap', 'combined']:
+            # Word swapping
+            new_words = swap_words(new_words, 
+                                 num_swaps=random.randint(1, 2))
+        
+        augmented_text = ' '.join(new_words)
+        if augmented_text != text:  # Only add if different from original
+            augmented_texts.append(augmented_text)
     
     # Ensure augmented texts are unique
     augmented_texts = list(set(augmented_texts))
     if len(augmented_texts) < num_augmentations:
-        # If we don't have enough unique versions, add the original text
-        augmented_texts.append(text)
+        # If we don't have enough unique versions, add more using different techniques
+        while len(augmented_texts) < num_augmentations:
+            new_text = augment_text(text, 1, replace_prob)[0]
+            if new_text not in augmented_texts:
+                augmented_texts.append(new_text)
     
     return augmented_texts[:num_augmentations]
 

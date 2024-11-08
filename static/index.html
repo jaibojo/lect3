@@ -129,8 +129,14 @@
             updateButtonStates('initial');
         });
 
+        // Add timing function
+        function formatTime(milliseconds) {
+            return `${(milliseconds / 1000).toFixed(2)} seconds`;
+        }
+
         // Update file input handler
         document.getElementById('fileInput').addEventListener('change', async (event) => {
+            const startTime = performance.now();
             const file = event.target.files[0];
             if (!file) {
                 updateButtonStates('initial');
@@ -153,7 +159,14 @@
                 }
                 
                 const data = await response.json();
-                document.getElementById('filePreview').textContent = data.content;
+                const endTime = performance.now();
+                document.getElementById('filePreview').innerHTML = `
+                    <div class="stat-card">
+                        <h5>File Processing Time</h5>
+                        <p>Time taken: ${formatTime(endTime - startTime)}</p>
+                    </div>
+                    <pre>${data.content}</pre>
+                `;
                 
                 currentFileName = data.filename;
                 updateButtonStates('file_uploaded');
@@ -167,6 +180,7 @@
 
         // Update preprocess button handler
         document.getElementById('preprocessButton').addEventListener('click', async () => {
+            const startTime = performance.now();
             if (!currentFileName) return;
 
             try {
@@ -185,6 +199,10 @@
                 
                 document.getElementById('preprocessedPreview').innerHTML = `
                     <div class="stats-container">
+                        <div class="stat-card">
+                            <h5>Processing Time</h5>
+                            <p>Time taken: ${formatTime(performance.now() - startTime)}</p>
+                        </div>
                         <div class="stat-card">
                             <h5>Token Statistics</h5>
                             <p>Total tokens: ${data.num_tokens}</p>
@@ -257,6 +275,7 @@
         });
 
         document.getElementById('augmentButton').addEventListener('click', async () => {
+            const startTime = performance.now();
             if (!currentFileName) return;
             
             try {
@@ -279,7 +298,21 @@
                 const data = await response.json();
                 
                 document.getElementById('augmentationResults').innerHTML = `
-                    <h3>Augmentation Results</h3>
+                    <div class="stats-container">
+                        <div class="stat-card">
+                            <h5>Processing Time</h5>
+                            <p>Time taken: ${formatTime(performance.now() - startTime)}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h5>Augmentation Statistics</h5>
+                            <p>Original Feedbacks: ${data.augmented_versions.length}</p>
+                            <p>Total Augmented Feedbacks: ${data.augmented_versions.length * data.num_augmentations}</p>
+                            <p>Augmentations per Feedback: ${data.num_augmentations}</p>
+                            <p>Replacement Probability: ${data.replace_probability}</p>
+                        </div>
+                    </div>
+
+                    <h3>Original and Augmented Feedbacks</h3>
                     <div class="augmented-text">
                         ${data.augmented_versions.map(version => `
                             <div class="augmentation-group">
@@ -294,6 +327,16 @@
                                     `).join('')}
                                 </div>
                             </div>
+                        `).join('')}
+                    </div>
+
+                    <h3>All Feedbacks (Combined)</h3>
+                    <div class="all-feedbacks">
+                        ${data.augmented_versions.map(version => `
+                            <pre class="feedback-line">${version.original}</pre>
+                            ${version.augmented.map(text => `
+                                <pre class="feedback-line">${text}</pre>
+                            `).join('')}
                         `).join('')}
                     </div>
                 `;
